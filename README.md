@@ -31,10 +31,10 @@ Install PyInstaller in the same virtual environment and run the build on the tar
 
 ```sh
 python -m pip install pyinstaller
-python -m PyInstaller --windowed --name AnyFind --paths . anyfind/__main__.py
+python -m PyInstaller AnyFind.spec
 ```
 
-Look for `AnyFind.app` under `dist` on macOS or the executable inside `dist/AnyFind` on Windows and Linux. Native macOS and Linux bundles still need build and launch verification.
+Look for `AnyFind.app` under `dist` on macOS or the executable inside `dist/AnyFind` on Windows and Linux. Keep the entire bundle together when moving it. The Windows x64 bundle was built and verified to open and close cleanly on Windows 11. Native macOS and Linux bundles still need build and launch verification.
 
 ## Search
 
