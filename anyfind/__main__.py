@@ -2,7 +2,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from .window import SearchWindow
+from anyfind.window import SearchWindow
 
 
 def main():

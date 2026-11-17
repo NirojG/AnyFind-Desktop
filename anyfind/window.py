@@ -1,9 +1,11 @@
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QDateTime, QTimer, Qt
+from PySide6.QtCore import QDateTime, QSettings, QTimer, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -24,8 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from .search import Matches, scan_folders, search
-from .theme import STYLESHEET
-from .windows import local_drives
+from .storage import local_storage
+from .theme import stylesheet
 
 ENTRY_ROLE = Qt.ItemDataRole.UserRole
 
@@ -36,7 +38,7 @@ class SearchWindow(QMainWindow):
         self.setWindowTitle("AnyFind")
         self.resize(1040, 600)
         self.setMinimumSize(780, 440)
-        self.setStyleSheet(STYLESHEET)
+        self._settings = QSettings("AnyFind", "AnyFind")
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="anyfind")
         self._future = None
         self._cancelled = Event()
@@ -60,9 +62,17 @@ class SearchWindow(QMainWindow):
         panel_layout.setSpacing(12)
         layout.addWidget(search_panel)
 
+        heading_row = QHBoxLayout()
         heading = QLabel("AnyFind")
         heading.setObjectName("brand")
-        panel_layout.addWidget(heading)
+        heading_row.addWidget(heading, 1)
+        self.theme_button = QPushButton()
+        self.theme_button.setMinimumHeight(32)
+        self.theme_button.setCheckable(True)
+        self.theme_button.setChecked(self._settings.value("darkMode", False, type=bool))
+        self.theme_button.toggled.connect(self._set_dark_mode)
+        heading_row.addWidget(self.theme_button)
+        panel_layout.addLayout(heading_row)
 
         search_row = QHBoxLayout()
         search_row.setSpacing(10)
@@ -80,7 +90,7 @@ class SearchWindow(QMainWindow):
 
         scope_row = QHBoxLayout()
         scope_row.setSpacing(8)
-        scan_pc = QPushButton("Scan this PC")
+        scan_pc = QPushButton("Scan this PC" if sys.platform == "win32" else "Scan this computer")
         scan_pc.setObjectName("scanPC")
         scan_pc.clicked.connect(self._scan_pc)
         choose_drive = QPushButton("Choose drive…")
@@ -114,7 +124,7 @@ class SearchWindow(QMainWindow):
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        self.status = QLabel("Scan this PC or choose a location to start.")
+        self.status = QLabel(f"{scan_pc.text()} or choose a location to start.")
         self.status.setObjectName("status")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
@@ -142,19 +152,32 @@ class SearchWindow(QMainWindow):
         self._file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         self._folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         self._update_actions()
+        self._apply_theme(self.theme_button.isChecked())
         self.query.setFocus()
+
+    def _apply_theme(self, dark: bool):
+        self.setStyleSheet(stylesheet(dark))
+        self.theme_button.setText("Light mode" if dark else "Dark mode")
+
+    def _set_dark_mode(self, dark: bool):
+        self._settings.setValue("darkMode", dark)
+        self._apply_theme(dark)
 
     def _scan_pc(self):
         try:
-            drives = local_drives()
+            storage = local_storage()
         except OSError as error:
             QMessageBox.warning(self, "Could not list local drives", str(error))
             return
-        self._start_scan(drives, "This PC · local drives")
+        label = (
+            "This PC · local drives" if sys.platform == "win32" else "This computer · local volumes"
+        )
+        self._start_scan(storage.roots, label, storage.boundaries)
 
     def _choose_drive(self):
         try:
-            drives = [str(path) for path in local_drives()]
+            storage = local_storage()
+            drives = [str(path) for path in storage.roots]
         except OSError as error:
             QMessageBox.warning(self, "Could not list local drives", str(error))
             return
@@ -163,12 +186,17 @@ class SearchWindow(QMainWindow):
             return
         drive, confirmed = QInputDialog.getItem(self, "Choose drive", "Drive", drives, editable=False)
         if confirmed:
-            self._start_scan([Path(drive)], drive)
+            self._start_scan((Path(drive),), drive, storage.boundaries)
 
     def _choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Choose folder")
         if folder:
-            self._start_scan([Path(folder)], folder)
+            try:
+                storage = local_storage()
+            except OSError as error:
+                QMessageBox.warning(self, "Could not list local drives", str(error))
+                return
+            self._start_scan((Path(folder),), folder, storage.boundaries)
 
     def _cancel_work(self):
         self._cancelled.set()
@@ -176,7 +204,9 @@ class SearchWindow(QMainWindow):
             self._future.cancel()
             self._future = None
 
-    def _start_scan(self, roots: list[Path], label: str):
+    def _start_scan(
+        self, roots: tuple[Path, ...], label: str, boundaries: frozenset[Path] = frozenset()
+    ):
         self._debounce.stop()
         self._cancel_work()
         self._scan = None
@@ -187,7 +217,7 @@ class SearchWindow(QMainWindow):
         self.status.setText("Scanning files and folders…")
         self.progress.show()
         self._cancelled = Event()
-        self._future = self._executor.submit(scan_folders, roots, self._cancelled)
+        self._future = self._executor.submit(scan_folders, roots, self._cancelled, boundaries)
         self._poll.start()
         self.query.setFocus()
 
@@ -264,7 +294,10 @@ class SearchWindow(QMainWindow):
         path = Path(item.data(0, ENTRY_ROLE))
         target = path.parent if containing_folder else path
         try:
-            os.startfile(str(target))
+            if sys.platform == "win32":
+                os.startfile(str(target))
+            elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
+                raise OSError(f"No desktop application could open {target}")
         except OSError as error:
             QMessageBox.warning(self, "Could not open location", str(error))
 

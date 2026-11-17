@@ -56,6 +56,17 @@ class SearchTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             scan_folders([self.root / "Missing"], self.cancelled)
 
+    def test_mounted_volume_is_scanned_only_when_included_as_a_root(self):
+        mount = self.root / "Archive"
+        boundaries = frozenset({mount})
+        single = scan_folders([self.root], self.cancelled, boundaries)
+        combined = scan_folders([self.root, mount], self.cancelled, boundaries)
+        self.assertFalse(any(entry.path.is_relative_to(mount) for entry in single.entries))
+        self.assertEqual(
+            [entry.path.name for entry in combined.entries if entry.path.is_relative_to(mount)],
+            ["employment-contract.pdf"],
+        )
+
     def test_cancelled_work_stops_before_scanning_or_matching(self):
         self.cancelled.set()
         self.assertEqual(scan_folders([self.root], self.cancelled).entries, [])

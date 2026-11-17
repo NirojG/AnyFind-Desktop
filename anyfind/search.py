@@ -31,7 +31,11 @@ class Matches:
     total: int
 
 
-def scan_folders(roots: list[Path], cancelled: Event) -> Scan:
+def scan_folders(
+    roots: list[Path] | tuple[Path, ...],
+    cancelled: Event,
+    boundaries: frozenset[Path] = frozenset(),
+) -> Scan:
     if not roots:
         raise OSError("No local drives were found.")
     pending = list(reversed(roots))
@@ -49,6 +53,9 @@ def scan_folders(roots: list[Path], cancelled: Event) -> Scan:
                 for child in children:
                     if cancelled.is_set():
                         break
+                    path = Path(child.path)
+                    if path in boundaries:
+                        continue
                     try:
                         metadata = child.stat(follow_symlinks=False)
                     except OSError:
@@ -60,7 +67,6 @@ def scan_folders(roots: list[Path], cancelled: Event) -> Scan:
                         & stat.FILE_ATTRIBUTE_REPARSE_POINT
                     ):
                         continue
-                    path = Path(child.path)
                     is_folder = stat.S_ISDIR(metadata.st_mode)
                     if is_folder:
                         pending.append(path)
